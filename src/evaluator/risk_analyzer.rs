@@ -2,8 +2,10 @@ use anyhow::{Result, Context};
 use serde::{Deserialize, Serialize};
 use tracing::{info, debug};
 
-use crate::listen_bot::SwapTransaction;
-use crate::rig_agent::{SentimentData, MarketData};
+use crate::listen_bot::mempool_scanner::SwapTransaction;
+use crate::rig_agent::agent::AgentDecision;
+use crate::rig_agent::sentiment::SentimentData;
+use crate::rig_agent::market_data::MarketData;
 
 pub struct RiskAnalyzer {
     // Configuration for risk analysis

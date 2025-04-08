@@ -2,7 +2,7 @@ use anyhow::{Result, Context};
 use serde::{Deserialize, Serialize};
 use solana_sdk::commitment_config::CommitmentConfig;
 use solana_sdk::pubkey::Pubkey;
-use solana_sdk::signature::{Keypair, read_keypair_file};
+use solana_sdk::signature::{Keypair, read_keypair_file, Signer};
 use std::env;
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -119,12 +119,17 @@ pub async fn initialize_config() -> Result<()> {
     Ok(())
 }
 
+pub fn get_rpc_url() -> Result<String> {
+    env::var("SOLANA_RPC_URL")
+        .context("SOLANA_RPC_URL environment variable not set")
+}
+
 pub fn get_keypair() -> Result<Keypair> {
     let wallet_path = env::var("WALLET_PATH")
-        .unwrap_or_else(|_| "~/.config/solana/id.json".to_string());
+        .context("WALLET_PATH environment variable not set")?;
     
     let expanded_path = shellexpand::tilde(&wallet_path).to_string();
     
     read_keypair_file(&expanded_path)
-        .context(format!("Failed to read keypair from {}", expanded_path))
+        .map_err(|e| anyhow::anyhow!("Failed to read keypair from {}: {}", expanded_path, e))
 }

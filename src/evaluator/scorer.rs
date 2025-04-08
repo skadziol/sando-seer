@@ -2,8 +2,9 @@ use anyhow::{Result, Context};
 use serde::{Deserialize, Serialize};
 use tracing::{info, debug};
 
-use crate::listen_bot::SwapTransaction;
-use crate::rig_agent::AgentDecision;
+use crate::listen_bot::mempool_scanner::SwapTransaction;
+use crate::rig_agent::agent::AgentDecision;
+use crate::listen_bot::transaction::TradeDecision;
 use super::OpportunityScore;
 
 pub struct OpportunityScorer {

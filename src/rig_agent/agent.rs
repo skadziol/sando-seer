@@ -1,10 +1,9 @@
 use anyhow::{Result, Context, anyhow};
 use serde::{Deserialize, Serialize};
 use tracing::{info, error, debug};
-use rig::agent::{Agent, AgentConfig};
-use rig::providers::openai::OpenAIProvider;
+use rand::Rng;
 
-use crate::listen_bot::SwapTransaction;
+use crate::listen_bot::mempool_scanner::SwapTransaction;
 use crate::evaluator::OpportunityScore;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -16,26 +15,12 @@ pub struct AgentDecision {
 }
 
 pub struct RigAgent {
-    agent: Option<Agent>,
+    api_key: Option<String>,
 }
 
 impl RigAgent {
     pub fn new(api_key: Option<String>) -> Self {
-        // Only initialize the rig agent if we have an API key
-        let agent = api_key.map(|key| {
-            let provider = OpenAIProvider::new(key);
-            let config = AgentConfig {
-                name: "SandoSeer MEV Oracle".to_string(),
-                description: "AI agent for detecting MEV opportunities on Solana".to_string(),
-                ..Default::default()
-            };
-            
-            Agent::new(config, Box::new(provider))
-        });
-        
-        Self {
-            agent,
-        }
+        Self { api_key }
     }
     
     pub async fn evaluate_opportunity(
@@ -46,48 +31,9 @@ impl RigAgent {
     ) -> Result<AgentDecision> {
         info!("Evaluating opportunity with RIG agent...");
         
-        // If we don't have an agent configured, use the simulation
-        if self.agent.is_none() {
-            info!("No RIG agent configured, using simulation");
-            return Ok(self.simulate_agent_decision(transaction));
-        }
-        
-        let agent = self.agent.as_ref().unwrap();
-        
-        // Format the context for the agent
-        let context = self.format_context(transaction, market_data, sentiment_data);
-        
-        // Create the prompt for the agent
-        let prompt = format!(
-            "You are an expert in MEV (Maximal Extractable Value) detection on the Solana blockchain. \
-            Your goal is to evaluate whether the following transaction presents a profitable MEV opportunity.\n\n\
-            === TRANSACTION CONTEXT ===\n{}\n\n\
-            Based on this information, evaluate whether this is a good MEV opportunity. \
-            Return your answer in JSON format with the following fields:\n\
-            - opportunity_score: a number between 0 and 1 indicating the quality of the opportunity\n\
-            - action: either 'enter' or 'skip'\n\
-            - risk_level: 'low', 'medium', or 'high'\n\
-            - reasoning: a brief explanation of your decision",
-            context
-        );
-        
-        // Send the prompt to the agent
-        let response = agent.prompt(prompt).await?;
-        
-        // Parse the JSON response
-        let decision: AgentDecision = match serde_json::from_str(&response) {
-            Ok(decision) => decision,
-            Err(e) => {
-                error!("Failed to parse agent response as JSON: {}", e);
-                error!("Raw response: {}", response);
-                
-                // Fall back to simulation
-                info!("Falling back to simulated decision");
-                self.simulate_agent_decision(transaction)
-            }
-        };
-        
-        Ok(decision)
+        // For now, always use simulation
+        info!("Using simulation mode");
+        Ok(self.simulate_agent_decision(transaction))
     }
     
     fn format_context(
@@ -133,6 +79,7 @@ impl RigAgent {
     
     fn simulate_agent_decision(&self, transaction: &SwapTransaction) -> AgentDecision {
         // Simplified simulation logic - in reality, this would be done by the LLM
+        let mut rng = rand::thread_rng();
         
         // Higher score for larger transactions (whales)
         let size_factor = (transaction.amount_in / 100.0).min(1.0) * 0.4;
@@ -159,7 +106,7 @@ impl RigAgent {
         let final_score = size_factor + slippage_factor + pool_factor + pair_factor;
         
         // Add some randomness for testing purposes
-        let random_factor = rand::random::<f64>() * 0.2;
+        let random_factor = rng.gen::<f64>() * 0.2;
         
         let opportunity_score = (final_score + random_factor).min(1.0);
         
