@@ -1,7 +1,7 @@
 mod config;
+mod evaluator;
 mod listen_bot;
 mod rig_agent;
-mod evaluator;
 mod monitoring;
 
 use anyhow::{Result, Context};
@@ -10,9 +10,20 @@ use dotenv::dotenv;
 use tokio::sync::mpsc;
 use tracing::{info, error, Level};
 use tracing_subscriber::FmtSubscriber;
+use std::sync::Arc;
+use tokio::signal;
 
-use listen_bot::{MempoolScanner, SwapTransaction, TransactionExecutor};
-use rig_agent::{RigAgent, SentimentAnalyzer, MarketDataCollector};
+use listen_bot::{
+    MempoolScanner,
+    mempool_scanner::SwapTransaction,
+    transaction::TransactionExecutor,
+};
+use rig_agent::{
+    RigAgent,
+    agent::AgentDecision,
+    sentiment::SentimentAnalyzer,
+    market_data::MarketDataCollector,
+};
 use evaluator::{OpportunityScorer, RiskAnalyzer, DecisionMaker};
 use monitoring::{Logger, TelegramNotifier};
 

@@ -16,15 +16,13 @@ if ! command -v solana &> /dev/null; then
     export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"
 fi
 
-# Clone required repositories
-echo "Cloning required repositories..."
+# Clone dependencies
 git clone https://github.com/piotrostr/rig
-git clone https://github.com/piotrostr/listen
 
 # Build dependencies
 echo "Building dependencies..."
 cd rig && cargo build && cd ..
-cd listen && cargo build && cd ..
+cd listen-core && cargo build && cd ..
 
 # Create .env file with default configuration
 echo "Creating .env file..."

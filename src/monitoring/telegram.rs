@@ -3,7 +3,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use tracing::{info, error};
 
-use crate::listen_bot::TradeDecision;
+use crate::listen_bot::transaction::TradeDecision;
 
 pub struct TelegramNotifier {
     bot_token: Option<String>,

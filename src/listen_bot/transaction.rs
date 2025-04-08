@@ -10,12 +10,12 @@ use solana_sdk::{
 use std::sync::Arc;
 use std::str::FromStr;
 use tracing::{info, error, debug};
-use listen::router::{
+use listen_core::router::{
     Router, RouterConfig,
     dexes::{Dex, DexName},
     quote::QuoteResponse,
 };
-use listen::model::token::Token;
+use listen_core::model::token::Token;
 
 use crate::config;
 
@@ -49,7 +49,7 @@ impl TransactionExecutor {
         // Initialize the listen Router
         let router_config = RouterConfig {
             rpc_url: rpc_url.to_string(),
-            ..Default::default()
+            commitment: "confirmed".to_string(),
         };
         
         let router = Router::new(router_config)?;

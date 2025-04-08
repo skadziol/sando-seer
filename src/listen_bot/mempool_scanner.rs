@@ -3,9 +3,9 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{info, error, debug};
-use listen::listen_engine::{self, ListenEngineConfig};
-use listen::router::dexes::{Dex, DexName};
-use listen::model::tx::Transaction as ListenTransaction;
+use listen_core::listen_engine::{ListenEngine, ListenEngineConfig};
+use listen_core::router::dexes::{Dex, DexName};
+use listen_core::model::tx::Transaction as ListenTransaction;
 use solana_sdk::pubkey::Pubkey;
 use std::str::FromStr;
 use futures::StreamExt;
@@ -45,11 +45,12 @@ impl MempoolScanner {
         // Configure listen-engine
         let listen_config = ListenEngineConfig {
             rpc_url: self.rpc_url.clone(),
-            ..Default::default()
+            commitment: "confirmed".to_string(),
+            ws_url: None,
         };
         
         // Initialize listen-engine
-        let listen_engine = listen_engine::ListenEngine::new(listen_config)?;
+        let listen_engine = ListenEngine::new(listen_config)?;
         
         // Set up DEX stream filters - focusing on major Solana DEXes
         let dexes = vec![
@@ -105,7 +106,6 @@ impl MempoolScanner {
         let amount_out = swap_info.amount_out as f64 / 10f64.powi(swap_info.token_out.decimals as i32);
         
         // Estimate slippage based on expected vs actual (simplified)
-        // In a real implementation, we'd need more data for accurate slippage
         let slippage = if let Some(expected_out) = swap_info.expected_out {
             let expected_amount = expected_out as f64 / 10f64.powi(swap_info.token_out.decimals as i32);
             if expected_amount > 0.0 {
@@ -122,7 +122,7 @@ impl MempoolScanner {
         
         // Determine the pool name from the DEX info
         let pool_name = match tx.dex {
-            Some(dex) => format!("{:?}", dex.name()),
+            Some(dex) => dex.to_string(),
             None => "Unknown".to_string(),
         };
         

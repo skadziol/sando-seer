@@ -1,8 +1,9 @@
 use anyhow::{Result, Context};
 use tracing::{info, debug};
 
-use crate::listen_bot::{SwapTransaction, TradeDecision};
-use crate::rig_agent::AgentDecision;
+use crate::listen_bot::mempool_scanner::SwapTransaction;
+use crate::rig_agent::agent::AgentDecision;
+use crate::listen_bot::transaction::TradeDecision;
 use super::OpportunityScore;
 
 pub struct DecisionMaker {
