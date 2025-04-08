@@ -95,156 +95,211 @@ async fn run_sandoseer(simulation_mode: bool) -> Result<()> {
         config.telegram_chat_id.clone(),
     );
     
-    // Start the mempool scanner
+    // Set up shutdown handling
+    let (shutdown_sender, mut shutdown_receiver) = mpsc::channel::<()>(1);
+    let shutdown_sender_clone = shutdown_sender.clone();
+    
+    // Handle Ctrl+C
     tokio::spawn(async move {
+        if let Err(e) = tokio::signal::ctrl_c().await {
+            error!("Failed to listen for Ctrl+C: {}", e);
+        }
+        info!("Shutdown signal received, stopping SandoSeer...");
+        let _ = shutdown_sender_clone.send(()).await;
+    });
+    
+    // Start the mempool scanner in a separate task
+    let scanner_handle = tokio::spawn(async move {
         if let Err(e) = mempool_scanner.start_scanning().await {
             error!("Mempool scanner error: {}", e);
         }
     });
     
     info!("SandoSeer is running. Monitoring for MEV opportunities...");
+    info!("Press Ctrl+C to stop.");
     
     // Main processing loop
-    while let Some(transaction) = tx_receiver.recv().await {
-        info!("Received transaction: {:?}", transaction);
-        
-        // 1. Gather market data
-        let tokens = vec![
-            transaction.token_in.clone(),
-            transaction.token_out.clone(),
-        ];
-        let market_data = match market_data_collector.get_market_data(&tokens).await {
-            Ok(data) => Some(data),
-            Err(e) => {
-                error!("Failed to get market data: {}", e);
-                None
+    loop {
+        tokio::select! {
+            // Check for shutdown signal
+            _ = shutdown_receiver.recv() => {
+                info!("Shutting down SandoSeer...");
+                break;
             }
-        };
-        
-        // 2. Get sentiment data
-        let sentiment = match sentiment_analyzer.get_token_sentiment(&transaction.token_out).await {
-            Ok(data) => Some(data),
-            Err(e) => {
-                error!("Failed to get sentiment data: {}", e);
-                None
-            }
-        };
-        
-        // 3. Get AI evaluation
-        let agent_decision = match rig_agent.evaluate_opportunity(
-            &transaction,
-            market_data.as_ref().map(|d| serde_json::to_string(d).unwrap_or_default()),
-            sentiment.as_ref().map(|s| serde_json::to_string(s).unwrap_or_default()),
-        ).await {
-            Ok(decision) => decision,
-            Err(e) => {
-                error!("Failed to get agent decision: {}", e);
-                continue;
-            }
-        };
-        
-        // 4. Score the opportunity
-        let opportunity_score = opportunity_scorer.calculate_score(
-            &transaction,
-            &agent_decision,
-            market_data.as_ref().map(|d| serde_json::to_string(d).unwrap_or_default()),
-        );
-        
-        // 5. Make the final decision
-        if !opportunity_scorer.should_execute(&opportunity_score) {
-            info!("Opportunity score too low, skipping");
-            continue;
-        }
-        
-        let trade_decision = match decision_maker.make_decision(
-            &transaction,
-            &opportunity_score,
-            &agent_decision,
-        ) {
-            Some(decision) => decision,
-            None => {
-                info!("Decision maker chose not to execute trade");
-                continue;
-            }
-        };
-        
-        // 6. Execute the trade
-        info!("Executing trade: {:?}", trade_decision);
-        
-        // Notify about detected opportunity
-        if let Err(e) = telegram.notify_opportunity_detected(&trade_decision).await {
-            error!("Failed to send Telegram notification: {}", e);
-        }
-        
-        // Simulate the transaction first to check if it would succeed
-        match transaction_executor.simulate_transaction(&trade_decision).await {
-            Ok(true) => {
-                info!("Transaction simulation successful, proceeding with execution");
-            }
-            Ok(false) => {
-                info!("Transaction simulation failed, skipping execution");
-                continue;
-            }
-            Err(e) => {
-                error!("Transaction simulation error: {}", e);
-                continue;
-            }
-        }
-        
-        // Actually execute the trade
-        match transaction_executor.execute_trade(trade_decision.clone()).await {
-            Ok(tx_signature) => {
-                info!("Trade executed successfully! Signature: {}", tx_signature);
-                
-                // Log the successful trade
-                let trade_log = monitoring::logger::TradeLog {
-                    timestamp: chrono::Utc::now(),
-                    token_in: trade_decision.token_in.clone(),
-                    token_out: trade_decision.token_out.clone(),
-                    amount_in: trade_decision.amount_in,
-                    amount_out: Some(trade_decision.expected_min_out),
-                    strategy: trade_decision.strategy.clone(),
-                    tx_signature: Some(tx_signature.clone()),
-                    success: true,
-                    profit: None, // We don't know the actual profit yet
-                    notes: Some(format!("Confidence: {}", trade_decision.confidence_score)),
-                };
-                
-                if let Err(e) = logger.log_trade(trade_log).await {
-                    error!("Failed to log trade: {}", e);
-                }
-                
-                // Send success notification
-                if let Err(e) = telegram.notify_trade_execution(&trade_decision, &tx_signature).await {
-                    error!("Failed to send Telegram notification: {}", e);
-                }
-            }
-            Err(e) => {
-                error!("Trade execution failed: {}", e);
-                
-                // Log the failed trade
-                let trade_log = monitoring::logger::TradeLog {
-                    timestamp: chrono::Utc::now(),
-                    token_in: trade_decision.token_in.clone(),
-                    token_out: trade_decision.token_out.clone(),
-                    amount_in: trade_decision.amount_in,
-                    amount_out: None,
-                    strategy: trade_decision.strategy,
-                    tx_signature: None,
-                    success: false,
-                    profit: None,
-                    notes: Some(format!("Error: {}", e)),
-                };
-                
-                if let Err(e) = logger.log_trade(trade_log).await {
-                    error!("Failed to log trade: {}", e);
+            
+            // Process incoming transactions
+            maybe_tx = tx_receiver.recv() => {
+                match maybe_tx {
+                    Some(transaction) => {
+                        process_transaction(
+                            &transaction,
+                            &rig_agent,
+                            &sentiment_analyzer,
+                            &market_data_collector,
+                            &opportunity_scorer,
+                            &decision_maker,
+                            &transaction_executor,
+                            &logger,
+                            &telegram
+                        ).await;
+                    }
+                    None => {
+                        error!("Transaction channel closed unexpectedly");
+                        break;
+                    }
                 }
             }
         }
-        
-        // Add a small delay to avoid overwhelming resources
-        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
     }
     
+    info!("SandoSeer shutdown complete.");
     Ok(())
+}
+
+async fn process_transaction(
+    transaction: &SwapTransaction,
+    rig_agent: &RigAgent,
+    sentiment_analyzer: &SentimentAnalyzer,
+    market_data_collector: &MarketDataCollector,
+    opportunity_scorer: &OpportunityScorer,
+    decision_maker: &DecisionMaker,
+    transaction_executor: &TransactionExecutor,
+    logger: &Logger,
+    telegram: &TelegramNotifier,
+) {
+    info!("Processing transaction: {:?}", transaction);
+    
+    // 1. Gather market data
+    let tokens = vec![
+        transaction.token_in.clone(),
+        transaction.token_out.clone(),
+    ];
+    let market_data = match market_data_collector.get_market_data(&tokens).await {
+        Ok(data) => Some(data),
+        Err(e) => {
+            error!("Failed to get market data: {}", e);
+            None
+        }
+    };
+    
+    // 2. Get sentiment data
+    let sentiment = match sentiment_analyzer.get_token_sentiment(&transaction.token_out).await {
+        Ok(data) => Some(data),
+        Err(e) => {
+            error!("Failed to get sentiment data: {}", e);
+            None
+        }
+    };
+    
+    // 3. Get AI evaluation
+    let agent_decision = match rig_agent.evaluate_opportunity(
+        &transaction,
+        market_data.as_ref().map(|d| serde_json::to_string(d).unwrap_or_default()),
+        sentiment.as_ref().map(|s| serde_json::to_string(s).unwrap_or_default()),
+    ).await {
+        Ok(decision) => decision,
+        Err(e) => {
+            error!("Failed to get agent decision: {}", e);
+            return;
+        }
+    };
+    
+    // 4. Score the opportunity
+    let opportunity_score = opportunity_scorer.calculate_score(
+        &transaction,
+        &agent_decision,
+        market_data.as_ref().map(|d| serde_json::to_string(d).unwrap_or_default()),
+    );
+    
+    // 5. Make the final decision
+    if !opportunity_scorer.should_execute(&opportunity_score) {
+        info!("Opportunity score too low, skipping");
+        return;
+    }
+    
+    let trade_decision = match decision_maker.make_decision(
+        &transaction,
+        &opportunity_score,
+        &agent_decision,
+    ) {
+        Some(decision) => decision,
+        None => {
+            info!("Decision maker chose not to execute trade");
+            return;
+        }
+    };
+    
+    // 6. Execute the trade
+    info!("Executing trade: {:?}", trade_decision);
+    
+    // Notify about detected opportunity
+    if let Err(e) = telegram.notify_opportunity_detected(&trade_decision).await {
+        error!("Failed to send Telegram notification: {}", e);
+    }
+    
+    // Simulate the transaction first to check if it would succeed
+    match transaction_executor.simulate_transaction(&trade_decision).await {
+        Ok(true) => {
+            info!("Transaction simulation successful, proceeding with execution");
+        }
+        Ok(false) => {
+            info!("Transaction simulation failed, skipping execution");
+            return;
+        }
+        Err(e) => {
+            error!("Transaction simulation error: {}", e);
+            return;
+        }
+    }
+    
+    // Actually execute the trade
+    match transaction_executor.execute_trade(trade_decision.clone()).await {
+        Ok(tx_signature) => {
+            info!("Trade executed successfully! Signature: {}", tx_signature);
+            
+            // Log the successful trade
+            let trade_log = monitoring::logger::TradeLog {
+                timestamp: chrono::Utc::now(),
+                token_in: trade_decision.token_in.clone(),
+                token_out: trade_decision.token_out.clone(),
+                amount_in: trade_decision.amount_in,
+                amount_out: Some(trade_decision.expected_min_out),
+                strategy: trade_decision.strategy.clone(),
+                tx_signature: Some(tx_signature.clone()),
+                success: true,
+                profit: None, // We don't know the actual profit yet
+                notes: Some(format!("Confidence: {}", trade_decision.confidence_score)),
+            };
+            
+            if let Err(e) = logger.log_trade(trade_log).await {
+                error!("Failed to log trade: {}", e);
+            }
+            
+            // Send success notification
+            if let Err(e) = telegram.notify_trade_execution(&trade_decision, &tx_signature).await {
+                error!("Failed to send Telegram notification: {}", e);
+            }
+        }
+        Err(e) => {
+            error!("Trade execution failed: {}", e);
+            
+            // Log the failed trade
+            let trade_log = monitoring::logger::TradeLog {
+                timestamp: chrono::Utc::now(),
+                token_in: trade_decision.token_in.clone(),
+                token_out: trade_decision.token_out.clone(),
+                amount_in: trade_decision.amount_in,
+                amount_out: None,
+                strategy: trade_decision.strategy,
+                tx_signature: None,
+                success: false,
+                profit: None,
+                notes: Some(format!("Error: {}", e)),
+            };
+            
+            if let Err(e) = logger.log_trade(trade_log).await {
+                error!("Failed to log trade: {}", e);
+            }
+        }
+    }
 }

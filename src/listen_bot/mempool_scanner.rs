@@ -8,6 +8,7 @@ use listen::router::dexes::{Dex, DexName};
 use listen::model::tx::Transaction as ListenTransaction;
 use solana_sdk::pubkey::Pubkey;
 use std::str::FromStr;
+use futures::StreamExt;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SwapTransaction {
