@@ -92,7 +92,12 @@ async fn run_sandoseer(simulation_mode: bool) -> Result<()> {
     let (tx_sender, mut tx_receiver) = mpsc::channel::<SwapTransaction>(100);
     
     // Initialize components
-    let mempool_scanner = MempoolScanner::new(config.rpc_url.clone(), tx_sender);
+    let mempool_scanner = MempoolScanner::new(
+        config.rpc_url.clone(),
+        tx_sender,
+        config.min_profit_threshold,
+        config.max_risk_threshold,
+    )?;
     let transaction_executor = TransactionExecutor::new(&config.rpc_url, simulation_mode)?;
     let rig_agent = RigAgent::new(config.rig_api_key.clone());
     let sentiment_analyzer = SentimentAnalyzer::new();

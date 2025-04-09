@@ -10,6 +10,8 @@ use solana_sdk::pubkey::Pubkey;
 use std::str::FromStr;
 use futures::StreamExt;
 
+use super::opportunity::{OpportunityDetector, MEVOpportunity};
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SwapTransaction {
     pub token_in: String,
@@ -20,23 +22,33 @@ pub struct SwapTransaction {
     pub pool_name: String,
     pub wallet_address: String,
     pub timestamp: i64,
+    pub mev_opportunity: Option<MEVOpportunity>,
 }
 
-#[derive(Debug, Clone)]
 pub struct MempoolScanner {
     rpc_url: String,
     tx_sender: mpsc::Sender<SwapTransaction>,
+    opportunity_detector: OpportunityDetector,
 }
 
 impl MempoolScanner {
     pub fn new(
         rpc_url: String,
         tx_sender: mpsc::Sender<SwapTransaction>,
-    ) -> Self {
-        Self {
+        min_profit_threshold: f64,
+        max_risk_threshold: f64,
+    ) -> Result<Self> {
+        let opportunity_detector = OpportunityDetector::new(
+            rpc_url.clone(),
+            min_profit_threshold,
+            max_risk_threshold,
+        )?;
+
+        Ok(Self {
             rpc_url,
             tx_sender,
-        }
+            opportunity_detector,
+        })
     }
     
     pub async fn start_scanning(&self) -> Result<()> {
@@ -92,14 +104,14 @@ impl MempoolScanner {
         // Extract the relevant swap data from the listen transaction
         
         // Check if it's a swap transaction
-        let swap_info = match tx.swap_info {
-            Some(info) => info,
+        let swap_info = match &tx.swap_info {
+            Some(ref info) => info,
             None => return Ok(None), // Not a swap transaction
         };
         
         // Extract the token information
-        let token_in = swap_info.token_in.symbol.unwrap_or_else(|| swap_info.token_in.mint.to_string());
-        let token_out = swap_info.token_out.symbol.unwrap_or_else(|| swap_info.token_out.mint.to_string());
+        let token_in = swap_info.token_in.symbol.clone().unwrap_or_else(|| swap_info.token_in.mint.to_string());
+        let token_out = swap_info.token_out.symbol.clone().unwrap_or_else(|| swap_info.token_out.mint.to_string());
         
         // Extract the amounts
         let amount_in = swap_info.amount_in as f64 / 10f64.powi(swap_info.token_in.decimals as i32);
@@ -125,6 +137,9 @@ impl MempoolScanner {
             Some(dex) => dex.to_string(),
             None => "Unknown".to_string(),
         };
+
+        // Analyze for MEV opportunities
+        let mev_opportunity = self.opportunity_detector.analyze_sandwich_opportunity(&tx).await?;
         
         // Create the SwapTransaction
         let swap_tx = SwapTransaction {
@@ -136,6 +151,7 @@ impl MempoolScanner {
             pool_name,
             wallet_address,
             timestamp: chrono::Utc::now().timestamp(),
+            mev_opportunity,
         };
         
         debug!("Processed swap transaction: {:?}", swap_tx);
